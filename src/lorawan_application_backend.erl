@@ -159,19 +159,17 @@ parse_uplink(#handler{appid = AppID, format = <<"raw">>},
         _Gateway, #link{devaddr=DevAddr}, #rxdata{data=Data}, _RxQ) ->
     {binary, Data,
         #{group => AppID, deveui => get_deveui(DevAddr), devaddr => DevAddr}};
-parse_uplink(#handler{appid = AppID, format = <<"json">>, fields = Fields, parse = Parse},
-        #gateway{mac=MAC}, #link{devaddr=DevAddr, appargs=AppArgs},
-        RxData=#rxdata{port=Port, data=Data}, RxQ) ->
-    Msg = lorawan_admin:build(
-        maps:merge(?to_map(rxdata, RxData),
-            vars_add(appargs, AppArgs,
-            vars_add_opt(gateway, #{mac => MAC}, Fields,
-            vars_add_opt(deveui, get_deveui(DevAddr), Fields,
-            vars_add_opt(datetime, calendar:universal_time(), Fields,
-            vars_add_opt(rxq, RxQ, Fields,
-            vars_add(fields, data_to_fields(Parse, Port, Data),
-            #{group => AppID, devaddr => DevAddr}))))))
-        )),
+parse_uplink(#handler{appid = AppID, format = <<"json">>, fields = _Fields, parse = Parse},
+        _Gateway, #link{devaddr=DevAddr}, #rxdata{port=Port, data=Data}, _RxQ) ->
+
+    VarsMap = maps:fold(fun vars_add/3,
+                        #{<<"timestamp">> => erlang:system_time(millisecond)},
+                        data_to_fields(Parse, Port, Data)),
+
+    Msg = lorawan_admin:build(VarsMap),
+
+    lager:debug("transmitting to mqtt ~p", [Msg]),
+
     {text, jsx:encode(Msg),
         #{group => AppID, deveui => get_deveui(DevAddr), devaddr => DevAddr}}.
 
@@ -179,18 +177,6 @@ vars_add(_Field, undefined, Vars) ->
     Vars;
 vars_add(Field, Value, Vars) ->
     Vars#{Field => Value}.
-
-vars_add_opt(_Field, undefined, _Fields, Vars) ->
-    Vars;
-vars_add_opt(Field, Value, undefined, Vars) ->
-    Vars#{Field => Value};
-vars_add_opt(Field, Value, Fields, Vars) ->
-    case lists:member(atom_to_binary(Field, latin1), Fields) of
-        true ->
-            Vars#{Field => Value};
-        false ->
-            Vars
-    end.
 
 get_deveui(DevAddr) ->
     case mnesia:dirty_index_read(devices, DevAddr, #device.link) of
